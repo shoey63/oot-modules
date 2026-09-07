@@ -12,34 +12,8 @@ jobs:
   build-driver:
     runs-on: ubuntu-latest
     steps:
-      - name: Free Disk Space (Ubuntu)
+      - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: false
-          dotnet: true
-          haskell: false
-          large-packages: false
-          docker-images: false
-          swap-storage: false
-
-      - name: Create Manual 16GB Swap File
-        run: |
-          echo "=== Freeing up any existing partial swap ==="
-          sudo swapoff -a
-          if [ -f /swapfile ]; then sudo rm -f /swapfile; fi
-
-          echo "=== Allocating 16GB Swap ==="
-          sudo fallocate -l 16G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-
-          echo "=== Verified Memory Configuration ==="
-          free -h
-
-      - name: Checkout OOT Repo
-        uses: actions/checkout@v4
 
       - name: Install repo tool
         run: |
@@ -54,48 +28,50 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b ${{ inputs.manifest_branch }} --depth=1
           repo sync -c --no-tags --no-clone-bundle -j$(nproc)
 
-      - name: Clone & Patch morrownr/8812au
+      - name: Ephemeral In-Tree Injection (From Commit History)
+        run: |
+          cd kernel_workspace/common
+          
+          # 1. Clone your builder repo
+          git clone https://github.com/shoey63/Kernel-Builder-GKI-Susfs.git /tmp/gki-builder
+          
+          # 2. Checkout the specific commit containing the fixed source
+          cd /tmp/gki-builder
+          git checkout 3b648af7c3c184645fe3545b8043e938b3d31c9e
+          
+          # 3. Copy the fixed driver into the GKI tree
+          cd $GITHUB_WORKSPACE/kernel_workspace/common
+          cp -r /tmp/gki-builder/tools/user_source/drivers/net/wireless/realtek/rtl8812au drivers/net/wireless/realtek/8812au
+          
+          # 4. Wire it into the kernel build system
+          cd drivers/net/wireless/realtek/8812au
+          
+          # Force Kconfig to build it as a module
+          sed -i '1s/^/CONFIG_RTL8812AU := m\n/' Makefile
+          
+          # Wire it into the Realtek Makefile
+          echo 'obj-m += 8812au/' >> ../Makefile
+          
+          # Force the main wireless Makefile to enter the Realtek folder
+          echo 'obj-y += realtek/' >> ../../Makefile
+
+      - name: Register Module with Bazel
         run: |
           cd kernel_workspace
-          git clone --depth 1 https://github.com/morrownr/8812au-20210820.git 8812au
           
-          # 1. Architecture Setup
-          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' 8812au/Makefile
-          sed -i 's/CONFIG_PLATFORM_ARM_AARCH64 = n/CONFIG_PLATFORM_ARM_AARCH64 = y/g' 8812au/Makefile
-          
-          # 2. Strip GCC-specific flags that crash Android's Clang compiler
-          sed -i 's/-Wno-enum-int-mismatch//g' 8812au/Makefile
-          sed -i 's/-Wno-stringop-overread//g' 8812au/Makefile
-          
-          # 3. Prevent driver from hijacking the build path to the Ubuntu Host
-          sed -i 's|KSRC ?= /lib/modules/$(shell uname -r)/build|KSRC := $(OUT_DIR)|g' 8812au/Makefile
+          # Tell Bazel to track and compile the injected driver
+          sed -i '/_COMMON_GKI_MODULES_LIST = \[/a \    "drivers/net/wireless/realtek/8812au/8812au.ko",' common/modules.bzl
 
-      - name: Create Kleaf BUILD.bazel
-        run: |
-          cat << 'EOF' > kernel_workspace/8812au/BUILD.bazel
-          load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
-          
-          kernel_module(
-              name = "8812au",
-              srcs = glob(["**/*"], exclude=["**/*.ko", "**/*.o", ".git/**"]),
-              outs = ["8812au.ko"],
-              kernel_build = "//common:kernel_aarch64",
-              make_args = [
-                  "KSRC=$(OUT_DIR)",
-                  "KDIR=$(OUT_DIR)",
-              ],
-          )
-          EOF
-
-      - name: Compile 8812AU via Bazel
+      - name: Compile 8812AU
         run: |
           cd kernel_workspace
-          tools/bazel build //8812au:8812au
-
+          tools/bazel build //common:kernel_aarch64
+          
       - name: Stage & Upload Artifact
         run: |
           mkdir -p out_module
-          find kernel_workspace/bazel-bin/8812au -name "8812au.ko" -exec cp {} out_module/ \;
+          # Search the output directory for the compiled driver
+          find kernel_workspace/out -name "8812au.ko" -exec cp {} out_module/ \;
           
       - name: Upload 8812AU Module
         uses: actions/upload-artifact@v4
