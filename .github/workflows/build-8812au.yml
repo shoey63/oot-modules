@@ -12,8 +12,31 @@ jobs:
   build-driver:
     runs-on: ubuntu-latest
     steps:
-      - name: Free Disk Space
+      - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: false
+          dotnet: true
+          haskell: false
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - name: Create Manual 16GB Swap File
+        run: |
+          echo "=== Freeing up any existing partial swap ==="
+          sudo swapoff -a
+          if [ -f /swapfile ]; then sudo rm -f /swapfile; fi
+
+          echo "=== Allocating 16GB Swap ==="
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+          echo "=== Verified Memory Configuration ==="
+          free -h
 
       - name: Checkout OOT Repo
         uses: actions/checkout@v4
@@ -34,8 +57,8 @@ jobs:
       - name: Clone morrownr/8812au
         run: |
           cd kernel_workspace
-          # Target the stable 20210629 branch which contains critical patches for 6.x kernels
-          git clone --depth 1 -b 20210629 https://github.com/morrownr/8812au-20210629.git 8812au
+          # Target the actively maintained 20210820 repository for modern kernels
+          git clone --depth 1 https://github.com/morrownr/8812au-20210820.git 8812au
           
           # Android uses ARM64. Modify the driver's Makefile to disable x86 and target aarch64.
           sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' 8812au/Makefile
