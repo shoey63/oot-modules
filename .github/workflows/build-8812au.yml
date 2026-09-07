@@ -54,15 +54,21 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b ${{ inputs.manifest_branch }} --depth=1
           repo sync -c --no-tags --no-clone-bundle -j$(nproc)
 
-      - name: Clone morrownr/8812au
+      - name: Clone & Patch morrownr/8812au
         run: |
           cd kernel_workspace
-          # Target the actively maintained 20210820 repository for modern kernels
           git clone --depth 1 https://github.com/morrownr/8812au-20210820.git 8812au
           
-          # Android uses ARM64. Modify the driver's Makefile to disable x86 and target aarch64.
+          # 1. Architecture Setup
           sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' 8812au/Makefile
           sed -i 's/CONFIG_PLATFORM_ARM_AARCH64 = n/CONFIG_PLATFORM_ARM_AARCH64 = y/g' 8812au/Makefile
+          
+          # 2. Strip GCC-specific flags that crash Android's Clang compiler
+          sed -i 's/-Wno-enum-int-mismatch//g' 8812au/Makefile
+          sed -i 's/-Wno-stringop-overread//g' 8812au/Makefile
+          
+          # 3. Prevent driver from hijacking the build path to the Ubuntu Host
+          sed -i 's|KSRC ?= /lib/modules/$(shell uname -r)/build|KSRC := $(OUT_DIR)|g' 8812au/Makefile
 
       - name: Create Kleaf BUILD.bazel
         run: |
@@ -74,6 +80,10 @@ jobs:
               srcs = glob(["**/*"], exclude=["**/*.ko", "**/*.o", ".git/**"]),
               outs = ["8812au.ko"],
               kernel_build = "//common:kernel_aarch64",
+              make_args = [
+                  "KSRC=$(OUT_DIR)",
+                  "KDIR=$(OUT_DIR)",
+              ],
           )
           EOF
 
