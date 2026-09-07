@@ -1,36 +1,71 @@
-# This is a basic workflow to help you get started with Actions
+name: Build RTL8812AU for NetHunter
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: 'GKI Manifest Branch'
+        required: true
+        default: 'common-android16-6.12-lts'
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  build-driver:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Checkout OOT Repo
+        uses: actions/checkout@v4
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Install repo tool
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Sync GKI Kernel Workspace
+        run: |
+          mkdir kernel_workspace && cd kernel_workspace
+          repo init -u https://android.googlesource.com/kernel/manifest -b ${{ inputs.manifest_branch }} --depth=1
+          repo sync -c --no-tags --no-clone-bundle -j$(nproc)
+
+      - name: Clone morrownr/8812au
+        run: |
+          cd kernel_workspace
+          # Target the stable 20210629 branch which contains critical patches for 6.x kernels
+          git clone --depth 1 -b 20210629 https://github.com/morrownr/8812au-20210629.git 8812au
+          
+          # Android uses ARM64. Modify the driver's Makefile to disable x86 and target aarch64.
+          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' 8812au/Makefile
+          sed -i 's/CONFIG_PLATFORM_ARM_AARCH64 = n/CONFIG_PLATFORM_ARM_AARCH64 = y/g' 8812au/Makefile
+
+      - name: Create Kleaf BUILD.bazel
+        run: |
+          cat << 'EOF' > kernel_workspace/8812au/BUILD.bazel
+          load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
+          
+          kernel_module(
+              name = "8812au",
+              srcs = glob(["**/*"], exclude=["**/*.ko", "**/*.o", ".git/**"]),
+              outs = ["8812au.ko"],
+              kernel_build = "//common:kernel_aarch64",
+          )
+          EOF
+
+      - name: Compile 8812AU via Bazel
+        run: |
+          cd kernel_workspace
+          tools/bazel build //8812au:8812au
+
+      - name: Stage & Upload Artifact
+        run: |
+          mkdir -p out_module
+          find kernel_workspace/bazel-bin/8812au -name "8812au.ko" -exec cp {} out_module/ \;
+          
+      - name: Upload 8812AU Module
+        uses: actions/upload-artifact@v4
+        with:
+          name: 8812au-Android-GKI
+          path: out_module/8812au.ko
