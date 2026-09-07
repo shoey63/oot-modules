@@ -28,39 +28,36 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b ${{ inputs.manifest_branch }} --depth=1
           repo sync -c --no-tags --no-clone-bundle -j$(nproc)
 
-      - name: Ephemeral In-Tree Injection (From Commit History)
+      - name: Ephemeral In-Tree Injection
         run: |
           cd kernel_workspace/common
           
-          # 1. Clone your builder repo
+          # 1. Grab the fixed source
           git clone https://github.com/shoey63/Kernel-Builder-GKI-Susfs.git /tmp/gki-builder
-          
-          # 2. Checkout the specific commit containing the fixed source
           cd /tmp/gki-builder
           git checkout 3b648af7c3c184645fe3545b8043e938b3d31c9e
           
-          # 3. Copy the fixed driver into the GKI tree
+          # 2. Copy the driver using its ORIGINAL folder name (rtl8812au)
           cd $GITHUB_WORKSPACE/kernel_workspace/common
-          cp -r /tmp/gki-builder/tools/user_source/drivers/net/wireless/realtek/rtl8812au drivers/net/wireless/realtek/8812au
+          cp -r /tmp/gki-builder/tools/user_source/drivers/net/wireless/realtek/rtl8812au drivers/net/wireless/realtek/rtl8812au
           
-          # 4. Wire it into the kernel build system
-          cd drivers/net/wireless/realtek/8812au
+          cd drivers/net/wireless/realtek/rtl8812au
           
-          # Force Kconfig to build it as a module
-          sed -i '1s/^/CONFIG_RTL8812AU := m\n/' Makefile
+          # 3. THE FIX: Set the exact variable your Makefile expects!
+          sed -i '1s/^/CONFIG_88XXAU := m\n/' Makefile
           
-          # Wire it into the Realtek Makefile
-          echo 'obj-m += 8812au/' >> ../Makefile
+          # 4. Wire it into the Realtek Makefile using the correct name
+          echo 'obj-m += rtl8812au/' >> ../Makefile
           
-          # Force the main wireless Makefile to enter the Realtek folder
+          # 5. Force the main wireless Makefile to enter the Realtek folder
           echo 'obj-y += realtek/' >> ../../Makefile
 
       - name: Register Module with Bazel
         run: |
           cd kernel_workspace
           
-          # Tell Bazel to track and compile the injected driver
-          sed -i '/_COMMON_GKI_MODULES_LIST = \[/a \    "drivers/net/wireless/realtek/8812au/8812au.ko",' common/modules.bzl
+          # Tell Bazel to expect 88XXau.ko inside the rtl8812au folder
+          sed -i '/_COMMON_GKI_MODULES_LIST = \[/a \    "drivers/net/wireless/realtek/rtl8812au/88XXau.ko",' common/modules.bzl
 
       - name: Compile 8812AU
         run: |
@@ -70,11 +67,4 @@ jobs:
       - name: Stage & Upload Artifact
         run: |
           mkdir -p out_module
-          # Search the output directory for the compiled driver
-          find kernel_workspace/out -name "8812au.ko" -exec cp {} out_module/ \;
-          
-      - name: Upload 8812AU Module
-        uses: actions/upload-artifact@v4
-        with:
-          name: 8812au-Android-GKI
-          path: out_module/8812au.ko
+          find kernel_workspace/out -name "88XXau.ko" -exec cp {} out_module/8812au.ko \;
