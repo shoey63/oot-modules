@@ -1,0 +1,50 @@
+name: Build Wi-Fi Module
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Driver Source
+        uses: actions/checkout@v4
+        with:
+          path: driver
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev clang lld llvm gcc-aarch64-linux-gnu
+
+      - name: Checkout Official GKI Kernel
+        run: |
+          mkdir common
+          cd common
+          git init
+          # Fetch only the exact commit we need with a depth of 1 (Takes 10 seconds instead of 15 minutes)
+          git fetch --depth 1 https://android.googlesource.com/kernel/common.git 956bb2204e5f
+          git checkout FETCH_HEAD
+
+      - name: Prepare Kernel Environment
+        run: |
+          cd common
+          # Configure for GKI and generate the necessary headers and Module.symvers map
+          make ARCH=arm64 LLVM=1 gki_defconfig
+          make ARCH=arm64 LLVM=1 modules_prepare
+
+      - name: Compile Wi-Fi Module
+        run: |
+          cd driver
+          # Compile the module against the prepared core kernel
+          make ARCH=arm64 LLVM=1 M=$PWD -C ../common modules
+          llvm-strip --strip-debug 88XXau.ko
+
+      - name: Upload .ko Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 88XXau-module
+          path: driver/88XXau.ko
