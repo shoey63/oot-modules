@@ -21,8 +21,8 @@ ccflags-y += -Wno-unknown-pragmas
 ccflags-y += -Wno-address
 ccflags-y += -Wno-vla -g
 
-ccflags-y += -I$(src)/include
-ccflags-y += -I$(src)/hal/phydm
+ccflags-y += -Idrivers/net/wireless/realtek/rtl8812au/include -I$(srctree)/$(src)/include
+ccflags-y += -I$(src)/hal/phydm -I$(srctree)/$(src)/hal/phydm
 EXTRA_LDFLAGS += --strip-debug -O3
 
 ########################## WIFI IC ############################

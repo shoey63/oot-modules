@@ -18,28 +18,36 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev clang lld llvm gcc-aarch64-linux-gnu
+          sudo apt-get install -y build-essential bc bison flex libssl-dev clang lld llvm gcc-aarch64-linux-gnu libelf-dev libdw-dev zlib1g-dev pkg-config dwarves
 
       - name: Checkout Official GKI Kernel
         run: |
-          mkdir common
+          # Use a blobless clone to bypass server restrictions while skipping gigabytes of unneeded history
+          git clone --filter=blob:none https://android.googlesource.com/kernel/common.git
           cd common
-          git init
-          # Fetch only the exact commit we need with a depth of 1 (Takes 10 seconds instead of 15 minutes)
-          git fetch --depth 1 https://android.googlesource.com/kernel/common.git 956bb2204e5f
-          git checkout FETCH_HEAD
+          git checkout 956bb2204e5f
 
-      - name: Prepare Kernel Environment
+      - name: Compile Full Kernel (Generates Module.symvers)
         run: |
           cd common
-          # Configure for GKI and generate the necessary headers and Module.symvers map
           make ARCH=arm64 LLVM=1 gki_defconfig
-          make ARCH=arm64 LLVM=1 modules_prepare
+          
+          # Force enable wireless subsystems, rfkill, and legacy WEXT
+          ./scripts/config --module CONFIG_CFG80211
+          ./scripts/config --module CONFIG_MAC80211
+          ./scripts/config --module CONFIG_RFKILL
+          ./scripts/config --enable CONFIG_CFG80211_WEXT
+          ./scripts/config --enable CONFIG_WIRELESS_EXT
+          ./scripts/config --enable CONFIG_WEXT_CORE
+          ./scripts/config --enable CONFIG_WEXT_PRIV
+          make ARCH=arm64 LLVM=1 olddefconfig
+          
+          # Explicitly build modules to ensure they are added to Module.symvers
+          make ARCH=arm64 LLVM=1 -j$(nproc) all modules
 
       - name: Compile Wi-Fi Module
         run: |
           cd driver
-          # Compile the module against the prepared core kernel
           make ARCH=arm64 LLVM=1 M=$PWD -C ../common modules
           llvm-strip --strip-debug 88XXau.ko
 
